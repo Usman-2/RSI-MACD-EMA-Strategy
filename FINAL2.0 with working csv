@@ -1,0 +1,104 @@
+import yfinance as yf
+import pandas as pd
+import ta
+from sklearn.model_selection import train_test_split
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import accuracy_score
+
+# Function to download historical stock data
+def download_stock_data(symbol, start_date, end_date):
+    data = yf.download(symbol, start=start_date, end=end_date)
+    return data
+
+# Function to count buy/sell signals, losses, and calculate win rate
+def count_buy_sell_losses(predictions, actual_prices, threshold_percent=2):
+    buy_signals = 0
+    losses = 0
+    
+    for i in range(len(predictions)):
+        if predictions[i] == 1:  # Buy signal
+            buy_signals += 1
+            if i + 1 < len(actual_prices):  # Ensure we are not at the last data point
+                if (actual_prices[i + 1] / actual_prices[i] - 1) < -threshold_percent / 100:
+                    losses += 1
+    
+    win_rate = (buy_signals - losses) / buy_signals * 100 if buy_signals > 0 else 0
+    return losses, win_rate
+
+# Function to execute buy orders based on predictions
+def execute_buy_orders(predictions, open_prices, signals_df):
+    buy_orders = []
+    
+    for i in range(len(predictions)):
+        if predictions[i] == 1:
+            buy_price = open_prices.iloc[i]
+            sell_price = open_prices.iloc[i + 1] if i + 1 < len(open_prices) else None
+            profit_loss = 'Loss' if sell_price and (sell_price < buy_price) else 'Profit'  # Check if it's a loss or profit
+            buy_orders.append(('Buy', buy_price, sell_price, profit_loss))
+            signals_df = pd.concat([signals_df, pd.DataFrame({'Date': [open_prices.index[i]], 'Buy_Price': [buy_price], 'Sell_Price': [sell_price], 'Profit_Loss': [profit_loss]})], ignore_index=True)
+
+    return buy_orders, signals_df
+
+# Define the stock symbol and timeframe for Tesla
+tesla_symbol = 'GOOGL'
+tesla_start_date = '2019-01-01'
+tesla_end_date = '2024-01-01'
+
+# Download historical data for Tesla
+tesla_data = download_stock_data(tesla_symbol, tesla_start_date, tesla_end_date)
+
+# Add technical indicators
+tesla_data['ema'] = ta.trend.ema_indicator(tesla_data['Close'], window=14)
+tesla_data['rsi'] = ta.momentum.rsi(tesla_data['Close'], window=14)
+tesla_data['macd'] = ta.trend.macd(tesla_data['Close'], window_fast=12, window_slow=26)
+
+# Add VWAP indicator
+tesla_data['vwap'] = ta.volume.volume_weighted_average_price(tesla_data['High'], tesla_data['Low'], tesla_data['Close'], tesla_data['Volume'])
+
+# Create buy/sell signals based on your strategy
+tesla_data['Signal'] = 0
+# Replace the following lines with your specific strategy
+# For example, you can use the crossover of ema and macd for signals
+tesla_data.loc[tesla_data['ema'] > tesla_data['macd'], 'Signal'] = 1  # Buy signal
+tesla_data.loc[tesla_data['ema'] < tesla_data['macd'], 'Signal'] = -1  # Sell signal
+
+# Drop NaN values and prepare features (X) and labels (y)
+tesla_data.dropna(inplace=True)  # Handle missing values by dropping them
+X_tesla = tesla_data[['ema', 'rsi', 'macd', 'vwap']]
+y_tesla = tesla_data['Signal']
+
+# Split the dataset into training and testing sets
+X_train_tesla, X_test_tesla, y_train_tesla, y_test_tesla = train_test_split(X_tesla, y_tesla, test_size=0.2, random_state=42)
+
+# Create and train a decision tree classifier for Tesla
+model_tesla = DecisionTreeClassifier(random_state=42)
+model_tesla.fit(X_train_tesla, y_train_tesla)
+
+# Make predictions on the test set for Tesla
+predictions_tesla = model_tesla.predict(X_test_tesla)
+
+# Now, you can use the trained model for predictions on new data for Tesla
+# Replace 'new_tesla_data' with your new data for prediction
+new_tesla_data = yf.download(tesla_symbol, start=tesla_start_date, end=tesla_end_date)  # Your new data for Tesla
+new_tesla_data['ema'] = ta.trend.ema_indicator(new_tesla_data['Close'], window=14)
+new_tesla_data['rsi'] = ta.momentum.rsi(new_tesla_data['Close'], window=14)
+new_tesla_data['macd'] = ta.trend.macd(new_tesla_data['Close'], window_fast=12, window_slow=26)
+new_tesla_data['vwap'] = ta.volume.volume_weighted_average_price(new_tesla_data['High'], new_tesla_data['Low'], new_tesla_data['Close'], new_tesla_data['Volume'])
+new_tesla_data.dropna(inplace=True)  # Handle missing values by dropping them
+new_tesla_predictions = model_tesla.predict(new_tesla_data[['ema', 'rsi', 'macd', 'vwap']])
+
+# Print buy/sell predictions for the new data for Tesla
+print('Predictions for new Tesla data:')
+print(new_tesla_predictions)
+
+# After making predictions on new data for Tesla
+buy_signals, signals_df = execute_buy_orders(new_tesla_predictions, new_tesla_data['Open'], pd.DataFrame())
+
+# Print the count of buy signals, losses, and win rate
+losses, win_rate = count_buy_sell_losses(new_tesla_predictions, new_tesla_data['Close'])
+print(f'Number of Buy Signals: {buy_signals}')
+print(f'Number of Losses: {losses}')
+print(f'Win Rate: {win_rate:.2f}%')
+
+# Save buy signals to CSV file
+signals_df.to_csv('buy_signals.csv', index=False)
